@@ -1,0 +1,993 @@
+---
+title: "Fake News Analysis"
+author: "Jerome Vincent Tagaro"
+date: "2024-12-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r loadLibraries}
+## Ensure libraries are downloaded in local R
+if(!require(tidytext)) 
+  install.packages("tidytext", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) 
+  install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(readxl)) 
+  install.packages("readxl", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) 
+  install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(ggrepel)) 
+  install.packages("ggrepel", repos = "http://cran.us.r-project.org")
+# Ensure Caret for training with dependencies
+if(!require(caret)) 
+  install.packages("caret", 
+                   repos = "http://cran.us.r-project.org",
+                   dependencies = TRUE)
+# Ensure additional libraries for training model are available
+# -> These does not need to be loaded using library()
+if(!require(naivebayes)) 
+  install.packages("naivebayes", repos = "http://cran.us.r-project.org")
+if(!require(MASS)) 
+  install.packages("MASS", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) 
+  install.packages("randomForest", repos = "http://cran.us.r-project.org")
+#
+# httr built for R version 4.4.2 ,
+#   but worked for R version 4.4.1
+if(!require(httr)) 
+  install.packages("httr", repos = "http://cran.us.r-project.org")
+#
+## Load libraries
+# Most used package in the code 
+suppressMessages(library(tidyverse))
+# Package for downloading data from http
+suppressMessages(library(httr))
+# Read csv data files
+suppressMessages(library(readxl))
+# Package for text analysis
+suppressMessages(library(tidytext))
+# Used for Rmarkdown report
+suppressMessages(library(knitr))
+# Load library used for training
+suppressMessages(library(caret))
+# For Plotting
+suppressMessages(library(ggrepel))
+## options
+options(digits = 6)
+## Version used
+# Version used and platform (for reference)
+versionSTR  <- version$version.string
+platformSTR <- version$platform
+```
+
+```{r loadData}
+## URL of backup zip File in github repository
+datasetURL <- "https://github.com/IgnisMagnus/FakeNewsAnalysis/raw/refs/heads/main/FakeNewsClassification.zip"
+## File names
+# Zip file containing the dataset
+zipFile <- "FakeNewsClassification.zip"
+# Train, Test, and evaluation data
+trainFileName <- "FakeNewsClassification/train (2).csv"
+testFileName <- "FakeNewsClassification/test (1).csv"
+evalFileName <- "FakeNewsClassification/evaluation.csv"
+#
+## Make sure data is retrievable (download / unzip)
+#
+# If zip file does not exist, download from repository backup
+if(!file.exists(zipFile)){
+  # GET request for the download link
+  datasetGET <- GET(datasetURL)
+  # Write GET request on a File
+  writeBin(content(datasetGET),zipFile)
+  # remove var if used.
+  rm(datasetGET)
+}
+# Check if files is already available for reading, get it from zip otherwise.
+if(!file.exists(trainFileName))
+  unzip(zipFile,trainFileName)
+#
+if(!file.exists(testFileName))
+  unzip(zipFile,testFileName)
+#
+if(!file.exists(evalFileName))
+  unzip(zipFile,evalFileName)
+## Retrieve data set
+train_set <- read_csv2(trainFileName)
+test__set <- read_csv2(testFileName)
+eval__set <- read_csv2(evalFileName)
+## RMs
+rm(datasetURL)
+rm(evalFileName)
+rm(testFileName)
+rm(trainFileName)
+rm(zipFile)
+```
+
+```{r miscVars}
+# Row used to show predcitor extraction.
+row_to_use <- 7
+```
+
+# Introduction
+
+The dataset was obtained at: <https://www.kaggle.com/datasets/aadyasingh55/fake-news-classification>
+
+The dataset provides a list of 40,000+ news articles, 
+with the corresponding title and text content. 
+The dataset was designed for studying Fake news detection.
+
+This project uses the aforementioned dataset to build a machine learning model 
+that can detect Fake news based on the title and text content.
+
+The modeling approach uses Sentiment Analysis in Natural Language Processing 
+(NLP) to interpret the data. From Dela Cruz (2023), NLP is explained as:\
+
+> Natural Language Processing (NLP) models are a branch of artificial intelligence that enables computers to understand, interpret, and generate human language.
+
+And Sentiment Analysis as:\
+
+> Sentiment analysis, also known as opinion mining, is a technique used in natural language processing (NLP) to identify and extract sentiments or opinions expressed in text data
+
+By using Sentiment Analysis, a set of *sentiments* can be obtained, 
+which can then be used to train a model for detecting Fake News. 
+The model for detecting Fake News will be a binary classification model, 
+which means that the model assigns either a *positive* or a *negative* class to an observation based on its set of predictors. 
+The model used for training will be chosen from a list of models depending on the resulting model *Accuracy*, *Specificity* and *Sensitivity*. 
+After the chosen model is optimized, the model will be retrained then evaluated.
+
+\newpage
+
+## Data set
+
+The retrieved data is already split into 3 different files :\
+- *train (2).csv*\
+- *test (1).csv*\
+- *evaluation.csv*\
+\
+As seen from the names of the files, 
+the data set is already split into a *train set*, *test set*, 
+and *evaluation set*. 
+The *train set* is meant to be used for analyzing, building,
+and training the model. 
+The *test set* is meant to be used for testing the built model, 
+and for further training of the model. 
+The *evaluation set* is used for evaluating the final model's performance.\
+\
+The raw data looks like this:\
+
+```{r rawDataLook}
+# Look at first few rows of the data set/s
+train_set %>% head(3) %>% 
+  mutate(across(2, ~ paste( substr(., 1, 30), " ..."))) %>%
+  mutate(across(3, ~ paste( substr(., 1, 80), " ..."))) %>% 
+  knitr::kable(caption = "Train Set")
+test__set %>% head(3) %>% 
+  mutate(across(2, ~ paste( substr(., 1, 30), " ..."))) %>%
+  mutate(across(3, ~ paste( substr(., 1, 80), " ..."))) %>% 
+  knitr::kable(caption = "Test Set")
+eval__set %>% head(3) %>% 
+  mutate(across(2, ~ paste( substr(., 1, 30), " ..."))) %>%
+  mutate(across(3, ~ paste( substr(., 1, 80), " ..."))) %>% 
+  knitr::kable(caption = "Evaluation Set")
+```
+
+With both title and text showing only the first few characters.\
+\
+
+\newpage
+
+The three tables has these properties:\
+*Train Set* :\
+- Columns *: `r train_set %>% colnames()`.*\
+- Rows *: `r train_set %>% nrow()`.*\
+*Test Set* :\
+- Columns *: `r test__set %>% colnames()`.*\
+- Rows : `r test__set %>% nrow()`\
+*Evaluation Set* :\
+- Columns *: `r eval__set %>% colnames()`.*\
+- Rows *: `r eval__set %>% nrow()`.*\
+\
+All the tables has the same columns:\
+- *...1* : appears to be an index/row variable\
+- *title* : the title of the news article\
+- *text* : the full text content of the news article\
+- *label* : either *1* if it is deemed to be *Fake News*, *0* otherwise.\
+
+\newpage
+
+# Methodology
+
+## Fix Tables
+
+The tables appear to be immediately usable except for the first column 
+*...1*. The column name may make introduce unnecessary errors the code. 
+Thus, the column name will be changed into *index* as it appears 
+to serve the same function.\
+
+```{r fixTables}
+train_set <- train_set %>% 
+  mutate(index = ...1) %>% 
+  dplyr::select(index, title, text, label)
+```
+
+```{r fixTables2}
+test__set <- test__set %>% 
+  mutate(index = ...1) %>% 
+  dplyr::select(index, title, text, label)
+eval__set <- eval__set %>% 
+  mutate(index = ...1) %>% 
+  dplyr::select(index, title, text, label)
+```
+
+The *train set* table now looks like this:\
+
+```{r showFixedTrainTable}
+train_set %>% head(3) %>% 
+  mutate(across(2, ~ paste( substr(., 1, 30), " ..."))) %>%
+  mutate(across(3, ~ paste( substr(., 1, 80), " ..."))) %>% 
+  knitr::kable(caption = "Fixed Train Set")
+```
+
+## Find Predictors
+
+### Word Tokens
+
+The raw *title* and *text* data cannot be used for 
+any useful machine learning model. 
+It is necessary to extract *predictors* that can be used to train a model.
+These *predictors* can be obtained using NLP.\
+\
+To demonstrate the extraction of useful predictors, one sample row will be used.
+In the following procedures, 
+the row `r row_to_use` of the *train set* will be used. 
+The sample row has the following content: \
+
+```{r showRowData}
+row_data <- train_set[row_to_use,]
+row_data %>% 
+  dplyr::select(index,label) %>% 
+  knitr::kable(caption = "Index and label of 1 row")
+row_data %>% 
+  dplyr::select(title) %>% 
+  knitr::kable(caption = "Title of 1 row")
+row_data %>% 
+  dplyr::select(text) %>% 
+  knitr::kable(caption = "Text of 1 row")
+```
+
+\
+Since, the *index* column is only for indexing, and the *label* column is the output. Thus, only the *title* and *text* columns can be used for predictors. Both columns contain a number of words that can be attached categories or values for prediction.\
+
+```{r showUnnestTokens}
+# From tidytext use unnest_tokens()
+unnested_words <- row_data %>% 
+  unnest_tokens(word,title) %>% 
+  .$word
+```
+
+For example, the previous *title* column can be separated and turned into a list of words or tokens:\
+*- `r unnested_words` .*
+
+The above list also contains articles or words that are not useful for analysis or *stop words*. Stop words are defined as:\
+
+> Stop words are a set of commonly used words in a language. Examples of stop words in English are “a,” “the,” “is,” “are,” etc. Stop words are commonly used in Text Mining and Natural Language Processing (NLP) to eliminate words that are so widely used that they carry very little useful information. (Ganesan, 2023)
+
+\
+
+```{r showStopWords}
+stop_word_list <- stop_words %>% 
+  head(10) %>% 
+  .$word
+```
+
+Example stop words in the `tidytext` library:\
+*- `r stop_word_list` .*\
+
+```{r titleTextWithoutStopWords}
+# Show how to remove stop words
+title_no_stop_words <- row_data %>% 
+  unnest_tokens(word,title) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  .$word
+```
+
+\
+Based on the list of stop words in `tidytext` library, the title of the sample row can be processed into:\
+Title words without stop words:\
+*- `r title_no_stop_words`.*\
+
+```{r titleTextRemovedStopWords}
+# removed words are
+title_stop_words <- row_data %>% 
+  unnest_tokens(word,title) %>% 
+  filter(word %in% stop_words$word) %>% 
+  .$word
+```
+
+\
+\
+\
+Looking at the stop words removed from Title:\
+*- `r title_stop_words` .*\
+The removed stop words indeed provide little information for analysis.\
+
+```{r textTextWithoutStopWords}
+text_no_stop_words <- row_data %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  head(20) %>% 
+  .$word
+```
+
+Trying out stop word removal for *text* column, show first 20 words:\
+*- `r text_no_stop_words` .*\
+
+\
+
+\newpage
+
+### Sentiment Lexicons
+
+To be able to extract information from useful words, a look up table of words to category/value will be used. The *tidytext* package contains 4 lexicons for sentiment analysis: *afinn*, *bing*, *loughran*, and *nrc*.\
+
+Looking at each lexicon:\
+\
+\
+
+#### **Bing**:
+
+\
+The first 5 words contained in the *bing* lexicon as sample:\
+
+```{r bingLexicon}
+senti_b <- get_sentiments("bing")
+senti_b %>% 
+  head(5) %>% 
+  knitr::kable(caption = "Bing Lexicon")
+unique_cat_b <- senti_b %>% 
+  .$sentiment %>% 
+  unique()
+rm(senti_b)
+```
+
+The Bing Lexicon attributes the categories *- `r unique_cat_b` ,* to each word. While it is useful, it overlaps with the function of the next lexicon.
+
+\
+\
+
+#### **Afinn**:
+
+\
+The first 5 word of the *afinn* lexicon as sample:\
+
+```{r afinnLexicon}
+senti_a <- get_sentiments("afinn")
+senti_a %>%
+  head(5) %>% knitr::kable(caption = "Afinn Lexicon")
+unique_cat_a <- senti_a %>% 
+  arrange(value) %>% 
+  .$value %>% 
+  unique()
+```
+
+\
+The Afinn Lexicon attributes each word the values:\
+*- `r unique_cat_a`.*\
+This value ranges from positive to negative value with a neutral *0* value. The afinn lexicon attributes a positive, negative, or neutral numeric value to words. This range of value is of better use for the model as, aside from the sign (positive / negative / neutral), it also provides magnitude.\
+
+\newpage
+
+#### **Loughran**:
+
+\
+The first 5 word of the *loughran* lexicon as sample:\
+
+```{r loughranLexicon}
+senti_l <- get_sentiments("loughran")
+unique_cat_l <- senti_l %>% 
+  .$sentiment %>% 
+  unique()
+senti_l %>% 
+  head(5) %>% 
+  knitr::kable(caption = "Loughran Lexicon")
+```
+
+Part of the loughran lexicon showing words with *superfluous* category:\
+
+```{r loughranLexicon_superfluous}
+senti_l %>% 
+  filter(sentiment == "superfluous") %>% 
+  head(5) %>% 
+  knitr::kable(caption = "Loughran Lexicon for superfluous category")
+```
+
+Part of the loughran lexicon showing words with *uncertainty* category:\
+
+```{r loughranLexicon_uncertainty}
+senti_l %>% 
+  filter(sentiment == "uncertainty") %>% 
+  head(5) %>% 
+  knitr::kable(caption = "Loughran Lexicon for uncertainty category")
+```
+
+\
+Loughran lexicon attributes each word the categories:\
+*- `r unique_cat_l` .*\
+\
+
+\newpage
+
+#### **NRC**:
+
+\
+The first 5 word of the *nrc* lexicon as sample:\
+
+```{r nrcLexicon}
+senti_n <- get_sentiments("nrc")
+unique_cat_n <- senti_n %>% .$sentiment %>% unique()
+senti_n %>% 
+  head(10) %>% 
+  knitr::kable(caption = "NRC Lexicon")
+```
+
+NRC lexicon attributes each word the category:\
+*- `r unique_cat_n`.*\
+This lexicon uses emotional categories of words for analysis.\
+\
+
+#### Lexicon Selection
+
+\
+
+```{r lexiconBase}
+base_words <- row_data %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  nrow()
+senA_words <- row_data %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(word) %>% 
+  inner_join(senti_a, by = "word") 
+senL_words <- row_data %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(word) %>% 
+  inner_join(senti_l, by = "word", relationship = "many-to-many")
+senN_words <- row_data %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(word) %>% 
+  inner_join(senti_n, by = "word", relationship = "many-to-many") 
+```
+
+Only part of the 4 lexicons will be used so that the model will not be too complex with too many columns. First, the *Bing* and *Afinn* Lexicons overlap in usage, assigning positive and negative categories or values to each word. However, *Afinn* derives more information than *Bing*, since the assigned values vary in magnitude. This means that the *Afinn* lexicon will be used instead of *Bing*. Second, the *Loughran* and *NRC* lexicon both assign categories to each of the words.
+
+Next step is evaluating the last three lexicons (without *Bing*). From base number of words without stop words of `r base_words`,\
+- *Afinn* Lexicon attributed a total of `r senA_words %>% nrow()` words.\
+- *Loughran* Lexicon attributed a total of `r senL_words %>% nrow()` words.\
+- *NRC* Lexicon attributed a total of `r senN_words %>% .$word %>% unique() %>% length()` unique words with some words attributed to multiple categories, bringing the total categorized words to `r senN_words %>% nrow()`\
+\
+Since both *Loughran* and *NRC* assigns categories to each of the words, one of the two can be selected. However, from the results above, the *Loughran* Lexicon could remove too many words from the text. Thus the *NRC* lexicon will be used instead of the *Loughran* lexicon.\
+
+The two lexicons to be used are *Afinn* and *NRC*.
+
+```{r lexiconRMs}
+# loughran removes too many words
+rm(senti_l)
+# remove clutter
+rm(senA_words,senL_words,senN_words)
+```
+
+\newpage
+
+### Sentiment Extraction
+
+Using the lexicons *NRC* and *Afinn*, it is now possible to extract a useful predictor from the sentiments/value.\
+
+For *Afinn*, the cumulative value can be used to identify the net sentiment of the content. Using *Afinn* to get the cumulative value for the first 5 rows:\
+
+```{r afinnShowPart}
+train_set[1:5,] %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(index,word) %>% 
+  left_join(senti_a, by = "word") %>%
+  mutate(value = ifelse(is.na(value), 0, value) ) %>% 
+  group_by(index) %>% 
+  summarise(value = sum(value)) %>% 
+  knitr::kable(caption = "Afinn Lexicon net value")
+```
+
+For *NRC*, the total count of word per category can be used to identify the common sentiment category in the text. For words not in any *NRC* category, they are put into the *neutral* category. Using *NRC* to get word counts per category:\
+
+```{r nrcShowPart}
+separated_words <- train_set[1:5,] %>% 
+  unnest_tokens(word,text) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(index,word)
+words_per_index <- separated_words %>% 
+  group_by(index) %>% 
+  summarise(total_words = n())
+separated_words %>% 
+  left_join(words_per_index, by = "index") %>% 
+  left_join(senti_n, by = "word", relationship = "many-to-many") %>% 
+  group_by(index,sentiment) %>% 
+  summarise(total = n()) %>% 
+  dplyr::select(sentiment, total) %>% 
+  mutate(sentiment = ifelse(is.na(sentiment), "neutral", sentiment)) %>% 
+  pivot_wider(names_from = sentiment,
+              values_from = total) %>% 
+  replace(is.na(.),0) %>% 
+  knitr::kable(caption = "NRC lexicon sentiment total")
+```
+
+Previously, the text column was used. However, it may be possible to also use title sentiments for predictors.\
+
+```{r titleAnalysisShowPart_afinn}
+train_set[1:4,] %>% 
+  unnest_tokens(word,title) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(index,word) %>% 
+  left_join(senti_a, by = "word") %>%
+  mutate(value = ifelse(is.na(value), 0, value) ) %>% 
+  group_by(index) %>% 
+  summarise(value = sum(value)) %>% 
+  knitr::kable(caption = "Afinn Net Value of Title")
+```
+
+```{r titleAnalysisShowPart_NRC}
+train_set[1:4,] %>% 
+  unnest_tokens(word,title) %>% 
+  filter(!word %in% stop_words$word) %>% 
+  dplyr::select(index,word) %>% 
+  mutate(total_words = count(.)$n) %>% 
+  left_join(senti_n, by = "word", relationship = "many-to-many") %>% 
+  group_by(index,sentiment) %>% 
+  summarise(total = n()) %>% 
+  mutate(sentiment = ifelse(is.na(sentiment), "neutral", sentiment)) %>% 
+  pivot_wider(names_from = sentiment,
+              values_from = total) %>% 
+  replace(is.na(.),0) %>% 
+  knitr::kable(caption = "NRC Sentiment Totals of Title")
+```
+
+\newpage
+
+### Extract Predictors From Dataset
+
+```{r predictorExtractorFunctions}
+## Define functions
+get_title_value <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,title) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    left_join(senti_a, by = "word") %>%
+    mutate(value = ifelse(is.na(value), 0, value) ) %>% 
+    group_by(index) %>% 
+    summarise(title_value = sum(value))
+}
+get_title_senti <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,title) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    left_join(senti_n, by = "word", relationship = "many-to-many") %>% 
+    group_by(index,sentiment) %>% 
+    summarise(number = n()) %>%  
+    mutate(sentiment = ifelse(is.na(sentiment), "neutral", sentiment)) %>% 
+    pivot_wider(names_from = sentiment,
+                values_from = number,
+                names_prefix = "title_") %>% 
+    replace(is.na(.),0)
+}
+get_text__value <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,text) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    left_join(senti_a, by = "word") %>%
+    mutate(value = ifelse(is.na(value), 0, value) ) %>% 
+    group_by(index) %>% 
+    summarise(text_value = sum(value))
+}
+get_text__senti <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,text) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    left_join(senti_n, by = "word", relationship = "many-to-many") %>% 
+    group_by(index,sentiment) %>% 
+    summarise(number = n()) %>%   
+    mutate(sentiment = ifelse(is.na(sentiment), "neutral", sentiment)) %>% 
+    pivot_wider(names_from = sentiment,
+                values_from = number,
+                names_prefix = "text_") %>% 
+    replace(is.na(.),0)
+}
+get_title_words <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,title) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    group_by(index) %>% 
+    summarise(title_words = n())
+}
+get_text__words <- function(dataset){
+  dataset %>% 
+    unnest_tokens(word,text) %>% 
+    filter(!word %in% stop_words$word) %>% 
+    dplyr::select(index,word) %>% 
+    group_by(index) %>% 
+    summarise(text_words = n())
+}
+get_data_desc <- function(dataset){
+  title_value <- get_title_value(dataset)
+  title_senti <- get_title_senti(dataset)
+  title_words <- get_title_words(dataset)
+  text__value <- get_text__value(dataset)
+  text__senti <- get_text__senti(dataset)
+  text__words <- get_text__words(dataset)
+  dataset %>% 
+    dplyr::select(index,label) %>% 
+    left_join(text__value, by = "index") %>% 
+    left_join(text__senti, by = "index") %>% 
+    left_join(title_value, by = "index") %>% 
+    left_join(title_senti, by = "index") %>% 
+    left_join(title_words, by = "index") %>% 
+    left_join(text__words, by = "index") %>% 
+    mutate(label = as.factor(label)) %>% 
+    replace(is.na(.),0)
+}
+```
+
+```{r extractTableDataDesc}
+# Train Set
+data_description <- get_data_desc(train_set)
+# Test Set
+data_description_t <- get_data_desc(test__set)
+# Evaluation Set
+data_description_E <- get_data_desc(eval__set)
+```
+
+The extracted predictors can now be joined into one table / data frame that will then be used for training a model. The extracted predictors for *train set*:\
+
+```{r trainSetDataDesc_Text}
+text_colnames <- data_description %>% 
+  dplyr::select(index,starts_with("text_")) %>% 
+  colnames() %>% 
+  str_remove(pattern = "text_")
+data_description %>% 
+  dplyr::select(index, starts_with("text_")) %>% 
+  head() %>% 
+  knitr::kable(caption = "Text Predictors of Train Set", col.names = text_colnames)
+```
+
+```{r trainSetDataDesc_Title}
+title_colnames <- data_description %>% 
+  dplyr::select(index,starts_with("title_")) %>% 
+  colnames() %>% 
+  str_remove(pattern = "title_")
+data_description %>% 
+  dplyr::select(index, starts_with("title_")) %>% 
+  head() %>% 
+  knitr::kable(caption = "Title Predictors of Train Set", col.names = title_colnames)
+```
+
+Notice that, alongside the (Afinn) *value* and the (NRC) sentiments, the total word count without stop words was also included as another predictor.\
+
+\newpage
+
+## Get A Working Model
+
+```{r splitDataDesc}
+input <- data_description %>% 
+  dplyr::select(-label) %>% 
+  dplyr::select(-index)
+# Get a column order
+column_order <- colnames(input)[order(colnames(input))]
+input <- input %>% 
+  dplyr::select(all_of(column_order))
+output <- data_description$label
+# Test
+input_t <- data_description_t %>% 
+  dplyr::select(-label) %>% 
+  dplyr::select(-index)
+input_t <- input_t %>% 
+  dplyr::select(all_of(column_order))
+output_t <- data_description_t$label
+```
+
+```{r workingModelFunctions}
+## Define functions to use
+model_train <- function(model){
+  set.seed(seed = 1, sample.kind = "Rounding")
+  caret::train(x = input, y = output, method = model)
+}
+model_predict <- function(model){
+  predict(model, input_t)
+}
+get_acc <- function(prediction){
+  res <- prediction %>% factor(levels = levels(output))
+  confusionMatrix(data = res, positive = "1", reference = output_t)$overall["Accuracy"]
+}
+get_stats <- function(prediction){
+ res <- prediction %>% factor(levels = levels(output))
+ confusionMatrix(data = res,
+                 positive = "1",
+                 reference = output_t)$byClass[c("Sensitivity", 
+                                                 "Specificity",
+                                                 "Prevalence")]
+}
+join_stats <- function(model,prediction){
+  accu <- get_acc(prediction)
+  stats <- get_stats(prediction)
+  jstats <- accu %>% 
+    as.data.frame() %>% 
+    rbind(stats %>% as.data.frame())
+  statNames <- jstats %>% rownames()
+  statNames
+  data.frame(Stats = statNames,
+             values = jstats[,1]) %>% 
+    mutate( model_name = model) %>% 
+    pivot_wider(names_from = "Stats",
+                values_from = "values")
+}
+full_predict <- function(model_name){
+  t_model <- model_train(model_name)
+  t_predi <- model_predict(t_model)
+  join_stats(model_name, t_predi)
+}
+```
+
+```{r defineModelList}
+## Define Models
+models <- c("naive_bayes", "glm", "qda", "lda", "rf", "knn")
+```
+
+Selected Models that are to be used: *- `r models` .*\
+*-`r models[1]`:* uses Naive Bayes model Classification for classification.\
+*-`r models[2]`:* uses Generalized Linear Model for classification.\
+*-`r models[3]`:* uses Quadratic Discriminant Analysis for classification.\
+*-`r models[4]`:* uses Linear Discriminant Analysis for classification.\
+*-`r models[5]`:* uses Random Forest model for classification.\
+*-`r models[6]`:* uses k-Nearest Neighbors for modeling.\
+
+These models are to be used to predict output, then evaluated based on *Accuracy*, *Sensitivity* and *Specificity*. The better model will then be further optimized to be used for the final model.\
+
+*Accuracy* is the percentage of the prediction that is of the correct category. *Sensitivity* and *Specificity*, similar to *Accuracy*, is the percentage of the correct prediction for "*positive*" and "*negative*" class respectively.\
+
+Using the following terms:\
+**True Positives** (*TP*) are the *positive* class that are predicted correctly.\
+**True Negatives** (*TN*) are the *negative* class that are predicted correctly.\
+**False Positives** (*FP*) are the *negative* class that are predicted (incorrectly) as *positive*.\
+**False Negative** (*FN*) are the *positive* class that are predicted (incorrectly) as *negative*.\
+
+The three statistics are defined by the formulas:\
+$$ Accuracy = \frac{TP + TN}{TotalPredictions}$$\
+$$ Sensitivity = \frac{TP}{TP+FN} $$\
+$$ Specificity = \frac{TN}{TN+FP}$$\
+
+```{r trainModelList}
+## Train Each model
+nb_stats <- full_predict(models[1])
+lm_stats <- full_predict(models[2])
+qd_stats <- full_predict(models[3])
+ld_stats <- full_predict(models[4])
+#
+rf_model <- model_train(models[5])
+rf_predi <- model_predict(rf_model)
+rf_stats <- join_stats(models[5], rf_predi)
+#
+kn_stats <- full_predict(models[6])
+all_stats <- nb_stats %>% 
+  rbind(lm_stats) %>% 
+  rbind(qd_stats) %>% 
+  rbind(ld_stats) %>% 
+  rbind(rf_stats) %>% 
+  rbind(kn_stats)
+```
+
+Training each of the models, the results are shown in a table:\
+
+```{r trainStatsTable}
+all_stats %>% knitr::kable(caption = "Model Training Statistics")
+```
+
+\newpage
+
+Visualizing Specificity, Sensitivity differences:\
+
+```{r visualSpecSensPlot, fig.cap="Training Models\' Specificity vs. Sensitivity"}
+all_stats %>% 
+  mutate(across(where(is.numeric), ~round(.x,3))) %>% 
+  mutate(coord_label = str_c(model_name," (",
+                             as.character(Sensitivity),",",
+                             as.character(Specificity),")")) %>% 
+  ggplot(aes(Specificity, Sensitivity)) +
+  geom_point(size = 2) +
+  geom_text_repel(aes(label = coord_label)) +
+  geom_abline(slope = 1, intercept = 0) +
+  theme_minimal() +
+  xlim(0.1,1) +
+  ylim(0.1,1)
+```
+
+Random Forest model has the highest Accuracy with reasonable Specificity and Sensitivity.\
+
+\newpage
+
+## Optimize Selected Model
+
+Looking at the obtained Random Forest model:\
+
+```{r rfModelStats}
+rf_model %>% knitr::knit_print()
+```
+
+The model used the tuning parameter *mtry*.
+The initial *Accuracy* within the sample is around 0.8.
+
+\newpage
+
+From the previous model, the important variables / predictors can be obtained and shown with its overall importance.
+
+```{r importantVarShow}
+ImportantVar <- varImp(rf_model) 
+ImportantVar [[1]] %>% 
+  as.data.frame() %>% 
+  arrange(desc(Overall)) %>% 
+  knitr::kable(caption = "Predictors arranged based on overall importance")
+```
+
+```{r getImportantVar}
+important_columns <- ImportantVar$importance %>% 
+  filter(Overall > 0) %>% 
+  rownames()
+non_imp_columns <-ImportantVar$importance %>% 
+  filter(Overall <= 0) %>% 
+  rownames()
+input <- input %>% 
+  dplyr::select(important_columns)
+input_t <- input_t %>% 
+  dplyr::select(important_columns)
+```
+
+One of the columns are not necessary for training. By changing the input to only use the important columns, the left over columns are:\
+*- `r input_t %>% names`.*\
+\
+The non-important column is *:`r non_imp_columns` .*\
+
+\newpage
+
+By removing the unimportant column and retraining the model, the results are:\
+
+```{r reTrain_2}
+set.seed(seed = 1, sample.kind = "Rounding")
+rf_model_2 <- model_train(models[5])
+rf_model_2 <- caret::train(x = input, y = output, method = "rf")
+rf_predi_2 <- model_predict(rf_model_2)
+rf_stats_2 <- join_stats(models[5], rf_predi_2)
+rf_model_2
+rf_stats_2 %>% 
+  knitr::kable(caption = "Model Result with removed unimportant predictors")
+```
+
+\newpage
+
+Next is optimizing the model parameter. From the model earlier, as well as the model details from `modelLookup()`:\
+
+```{r lookupModel}
+modelLookup("rf") %>% 
+  knitr::kable(caption = "RF model lookup details / tuning parameters")
+```
+
+Optimization parameter is *mtry*, and the final model used to get the highest accuracy is at `mtry = 2`. To find an even better fit, try training the model using *mtry* values close to *2*.
+
+Trying an mtry sequence from 2 to 5:\
+
+```{r mtrySeq}
+mtry_arr = c(2,3,4,5)
+set.seed(seed = 1, sample.kind = "Rounding")
+rf_model_s <- caret::train(x = input, y = output, 
+                     method = "rf", tuneGrid = data.frame(mtry=mtry_arr))
+rf_model_s
+# 
+res <- model_predict(rf_model_s)
+#
+seq_stat <- join_stats("Optimized RF",res)
+seq_stat %>% 
+  knitr::kable(caption = "Model Result with optimized mtry.")
+```
+
+```{r getParameter}
+mtry_final <- rf_model_s$finalModel$tuneValue$mtry
+```
+
+\newpage
+
+# Results
+
+Finally, add *test set* onto the *train set*, then retrain model in Random Forest with mtry parameter set to `r mtry_final`.
+
+```{r finalModelEval}
+# Join train and test input output
+data_desc_F <- rbind(data_description,
+                     data_description_t %>% 
+                       mutate(index = nrow(data_description) + index))
+input_F <- data_desc_F %>% 
+  dplyr::select(-label) %>% 
+  dplyr::select(-index)
+input_F <- input_F %>% 
+  dplyr::select(all_of(important_columns))
+output_F <- data_desc_F$label
+# retrain new set using mtry_final
+set.seed(seed = 1, sample.kind = "Rounding")
+ml_final <- caret::train(x = input_F, y = output_F, 
+                         method = "rf", tuneGrid = data.frame(mtry = mtry_final))
+# From Eval input output
+input_E <- data_description_E %>% 
+  dplyr::select(-label) %>% 
+  dplyr::select(-index)
+input_E <- input_E %>% 
+  dplyr::select(all_of(important_columns))
+output_E <- data_description_E$label
+# Predict output 
+predicted_Final <- predict(ml_final,input_E) %>% 
+  factor(levels = levels(output))
+cm_Final <- confusionMatrix(data = predicted_Final, reference = output_E, positive = "1")
+cm_accu <- cm_Final$overall["Accuracy"]
+cm_stat <- cm_Final$byClass[c("Sensitivity", 
+                              "Specificity", 
+                              "Prevalence")]
+cm_join_t <- cm_accu %>% 
+  as.data.frame() %>% 
+  rbind(cm_stat %>% as.data.frame())
+cm_names <- cm_join_t %>% rownames()
+cm_join <- data.frame(Stats = cm_names,
+                      values = cm_join_t[,1]) %>% 
+  mutate(model_name = "Optimized Final RF") %>% 
+  pivot_wider(names_from = "Stats",
+              values_from = "values")
+rm(cm_join_t,cm_names)
+#
+cm_join %>% knitr::kable(caption = "Final Model Statistics")
+```
+
+```{r getForShowNumerics}
+final_accuracy <- cm_Final$overall["Accuracy"] %>% round(4) * 100
+final_sensitivity <- cm_Final$byClass["Sensitivity"]
+final_specificity <- cm_Final$byClass["Specificity"]
+```
+
+The final model achieved an `r final_accuracy`% *Accuracy*. 
+With a `r final_sensitivity %>% round(4) * 100`% of labeling a Fake News article as Fake News (*Sensitivity*).
+With this level of *Accuracy* and *Sensitivity*, 
+the model provides a reliable way of automatically detecting a Fake News article. 
+However, the model still has a `r (1 - final_specificity) %>% round(4)*100`% chance
+of mislabeling a genuine article as fake news. 
+
+# Conclusion
+
+The Final Model was obtained through the use of Sentiment Analysis. Two lexicons, *Afinn* and *NRC*, were used to evaluate each word in the *title* and *text* columns. The values and categories obtained from the lexicons was then used to build a set of predictors that can be used to train a machine learning model. From the set of predictors, a list of models was trained and evaluated. The *Random Forest* model was then selected for the Final Model based on *Accuracy*, *Sensitivity*, and, *Specificity*. The *Random Forest* model's optimization parameter *mtry* was further optimized to get the Highest Accuracy possible from the model. Then, both the *train set* and *test set* was used for training the Final *Random Forest* model with `mtry = 4`. Finally, The Final Model was evaluated using extracted predictors from *evaluation set*. The *Accuracy* of the Final model was `r final_accuracy`%, with a *Sensitivity* of `r final_sensitivity` and a *Specificity* of `r final_specificity`. The model has a higher *Sensitivity* than *Specificity*. High *Sensitivity* means that the model has a high rate of detecting Fake news articles. However the relatively lower *Specificity* means that it can label genuine articles as Fake news.
+
+The Model achieved a reasonably high *Accuracy* and *Sensitivity*. However, the model can be further improved. First, the lexicons used was only able to evaluate parts of the text. More extensive lexicons may improve the model. Secondly, the model was unable to evaluate the links or videos inside the articles. The dialogue / transcript / script of these videos could be used to further improve the model. However, this requires accessing each link and obtaining the script, which would add a lot of complexity to the model. Lastly, the model could be modified and improved to, instead of directly labeling Real/Fake News, determine the chance that a given input is Fake news or not. This would probably be more useful than directly labeling the news as Real or Fake.\
+
+\newpage
+
+# References
+
+Dataset obtained at:\
+
+> Singh, A. (2024, October 22). Kaggle : Fake news classification. <https://www.kaggle.com/datasets/aadyasingh55/fake-news-classification>
+
+Other references for the report:\
+
+> De La Cruz, R. (2023, December 21). Sentiment Analysis using Natural Language Processing (NLP). Medium. [https://medium.com/\@robdelacruz/sentiment-analysis-using-natural-language-processing-nlp-3c12b77a73ec](https://medium.com/@robdelacruz/sentiment-analysis-using-natural-language-processing-nlp-3c12b77a73ec){.uri}
+
+> Ganesan, K. (2023, March 12). What are Stop Words? Opinosis Analytics. <https://www.opinosis-analytics.com/knowledge-base/stop-words-explained/>
+
